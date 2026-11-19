@@ -22,10 +22,18 @@ with p the earn rate as a fraction):
      refresh brings a flood of new tracked players who have earned little:
      shift medians down and widen the spread, scaled by how short the
      horizon is. A refresh is the whole story over 90 minutes; over days
-     the trend matters more.
+     the trend matters more. Fast-earned trophies (Chapter 1, fishing,
+     arcade) dilute less than the rest, because their earner counts grow
+     with the flood — Chapter 2 is in between.
   5. Spread: fit residual scatter (with leverage at the target) plus a
      horizon random-walk term plus a staleness term, floored and capped,
      so the quantiles are honest about what is not known.
+
+v2 changes vs v1 (2026-11-20): flat shift 1.5 -> 1.7, stale sigma
+0.55 -> 0.45, earn-speed bonus added (fast 3.0, mid 0.5), slope
+shrinkage K 5 -> 0 (final-like sims: the pooled prior only adds bias
+when every trophy has many distinct reads). Trend window stays 24h:
+36h/48h windows lost badly on the sims.
 
 Standard library only, deterministic (no randomness, no wall clock: every
 time comes from the case file), reads every *.in in the input directory and
@@ -51,10 +59,15 @@ Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 RELEASE_FALLBACK = datetime(2026, 11, 19, 0, 0, 0, tzinfo=timezone.utc)
 
 # Trend window: only the last day of reads carries the drift the target
-# inherits. Shorter histories use all they have.
+# inherits. Shorter histories use all they have. (v2: 36h/48h windows were
+# tested on final-like sims and lost badly — the launch flood drags the
+# slope. 24h stays.)
 WINDOW_H = 24.0
 # Prior strength (in effective observations) for slope shrinkage.
-SHRINK_K = 5.0
+# v2: 0 — on final-like sims the pooled prior only adds bias (every
+# trophy has many distinct reads in a 2.5-day history, so its own fit is
+# well determined); K=0 beat K=3/5/8 on all three sim scenarios.
+SHRINK_K = 0.0
 # Caps to keep any extrapolation from running away.
 SLOPE_CAP = 2.5
 MOVE_CAP = 2.5
@@ -62,9 +75,21 @@ MOVE_CAP = 2.5
 # refresh risk adds. The shift has a fixed part (the imminent refresh,
 # which is the whole story over 90 minutes) plus a part that grows with
 # the horizon (dilution keeps compounding while the page sits stale).
-FLAT_SHIFT_BASE = 1.5
+FLAT_SHIFT_BASE = 1.7
 FLAT_SHIFT_GROWTH = 1.0
-FLAT_SIGMA = 0.55
+FLAT_SIGMA = 0.45
+# Earn-speed bonus: not every trophy dilutes alike. Early activities
+# (Chapter 1, fishing, arcade) are earned fast, so while new players flood
+# in, their earner counts grow almost as fast and their rates barely fall;
+# Chapter 2 is in between; late story and completionist trophies earn
+# slowly and dilute almost in full. The bonus grows with the horizon the
+# same way the shift's growth part does, and is subtracted from the shift.
+# v2 values: base 1.5 -> 1.7 and sigma 0.55 -> 0.45 from the extended
+# sweep (36 + 54 combos on synthetic practice + the real 14:10 UTC page);
+# the bonus itself is calibrated on the real page (Chapter 1's rate moved
+# only -0.54 logit in 11h while most trophies moved about -2.9).
+BONUS_FAST = 3.0
+BONUS_MID = 0.5
 # Spread pieces.
 HORIZON_SIGMA_PER_SQRT_DAY = 0.15
 SIGMA_FLOOR = 0.25
@@ -128,6 +153,21 @@ def ols_line(xs, ys):
         return ybar, 0.0
     b = sum((x - xbar) * (y - ybar) for x, y in zip(xs, ys)) / sxx
     return ybar - b * xbar, b
+
+
+def earn_speed_bonus(trophy):
+    """How much less this trophy dilutes than the flat shift, in units of
+    ln(1 + horizon_hours / 12). Early activities earn fast (bonus), late
+    ones earn slowly (no bonus)."""
+    d = trophy.get("description", "")
+    if "Chapter 1" in d:
+        return BONUS_FAST
+    if "Chapter 2" in d:
+        return BONUS_MID
+    low = d.lower()
+    if "fishing" in low or "arcade" in low:
+        return BONUS_FAST
+    return 0.0
 
 
 def forecast_case(case, name):
@@ -207,6 +247,7 @@ def forecast_case(case, name):
     # keeps compounding over a long one while the page sits stale.
     horizon_hours = case["horizon_minutes"] / 60.0
     flat_shift = FLAT_SHIFT_BASE + FLAT_SHIFT_GROWTH * math.log(1.0 + horizon_hours / 12.0)
+    horizon_log = math.log(1.0 + horizon_hours / 12.0)
 
     rows = []
     for i, trophy in enumerate(trophies):
@@ -244,11 +285,12 @@ def forecast_case(case, name):
 
         # A page that has not moved is about to: the next refresh brings a
         # flood of new tracked players who have earned little, so rates
-        # fall. Everything but a trophy already at ~100% drops.
+        # fall. Everything but a trophy already at ~100% drops. Fast-earned
+        # trophies dilute less: their earner counts grow with the flood.
         sigma_stale = 0.0
         if page_stale:
             if last_rate < 99.5:
-                median_lg -= flat_shift
+                median_lg -= flat_shift - earn_speed_bonus(trophy) * horizon_log
             sigma_stale = FLAT_SIGMA if last_rate < 99.5 else 0.3
 
         # Keep the median move from the last read inside sane bounds.
