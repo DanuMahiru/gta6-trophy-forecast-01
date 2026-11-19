@@ -35,6 +35,24 @@ shrinkage K 5 -> 0 (final-like sims: the pooled prior only adds bias
 when every trophy has many distinct reads). Trend window stays 24h:
 36h/48h windows lost badly on the sims.
 
+v3 changes vs v2 (2026-11-20): ADAPTIVE trend window — the shortest of
+12/18/24/36/48h holding at least 3 distinct rate vectors, else all
+distinct reads (a 12h window beats 24h on final-like sims, mean 0.138
+vs 0.213, because the recent slope is flatter than the 24h average
+when the truth saturates; the adaptive rule keeps it robust when the
+real page refreshes slowly — the 14:10 UTC snapshot was still live at
+22:03 UTC on Nov 19). Flat shift 1.7 -> 1.6 with growth 1.0 -> 1.5
+(same 90-min shift, bigger long-horizon shift: the real 11h page move
+was ~-2.5 to -2.9 logit, which growth 1.0 under-shifts). Stale sigma
+0.45 -> 0.30 (narrower wins on practice, noisy proxies and the
+median-bias stress test; wider only helps by 0.008 when the median is
+biased the expensive way). MOVE_CAP 2.5 -> 3.0 (the cap bound the 11h
+real move). Near-100% median cap logit(99.98) -> logit(99.99) (the cap
+alone cost ~0.35 loss on Gone Fishing in every practice test; the
+trophy sits at 99.99% in reality). Slope damping was tried (0.5/1/2)
+and REJECTED: it hurts every sim scenario, because the shorter window
+already captures the saturation effect.
+
 Standard library only, deterministic (no randomness, no wall clock: every
 time comes from the case file), reads every *.in in the input directory and
 writes one *.out per case.
@@ -58,11 +76,23 @@ Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
 
 RELEASE_FALLBACK = datetime(2026, 11, 19, 0, 0, 0, tzinfo=timezone.utc)
 
-# Trend window: only the last day of reads carries the drift the target
-# inherits. Shorter histories use all they have. (v2: 36h/48h windows were
-# tested on final-like sims and lost badly — the launch flood drags the
-# slope. 24h stays.)
-WINDOW_H = 24.0
+# Trend window: the last 12 hours of distinct reads carry the drift the
+# target inherits — v3: on final-like sims a 12h window beats 24h badly
+# (mean 0.138 vs 0.213; the recent slope is flatter than the 24h average
+# when the truth saturates, so the straight line overshoots less). But a
+# 12h window only identifies a slope when the page refreshed at least 3
+# times inside it, and the real Exophase page refreshes slowly (the
+# 14:10 UTC snapshot was still live at 22:03 UTC on Nov 19), so the
+# window is ADAPTIVE: the shortest of 12/18/24/36/48h holding at least 3
+# distinct rate vectors, else all distinct reads. (v2: fixed 24h; 36h/48h
+# tested and lost badly — the launch flood drags the slope.)
+WINDOW_OPTIONS = (12.0, 18.0, 24.0, 36.0, 48.0)
+WINDOW_H = 12.0  # default; forecast_case picks adaptively per case
+# Near-100% median cap: a trophy everyone earns (Gone Fishing) sits at
+# 99.99% and must not be capped a whole 0.69 logit below it (v2 capped at
+# logit(99.98); the cap alone cost ~0.35 loss on that one trophy in every
+# practice test).
+NEAR_FULL_MEDIAN_CAP = 99.99
 # Prior strength (in effective observations) for slope shrinkage.
 # v2: 0 — on final-like sims the pooled prior only adds bias (every
 # trophy has many distinct reads in a 2.5-day history, so its own fit is
@@ -70,14 +100,14 @@ WINDOW_H = 24.0
 SHRINK_K = 0.0
 # Caps to keep any extrapolation from running away.
 SLOPE_CAP = 2.5
-MOVE_CAP = 2.5
+MOVE_CAP = 3.0
 # Stale-page dilution: how far medians shift down and how much spread the
 # refresh risk adds. The shift has a fixed part (the imminent refresh,
 # which is the whole story over 90 minutes) plus a part that grows with
 # the horizon (dilution keeps compounding while the page sits stale).
-FLAT_SHIFT_BASE = 1.7
-FLAT_SHIFT_GROWTH = 1.0
-FLAT_SIGMA = 0.45
+FLAT_SHIFT_BASE = 1.6
+FLAT_SHIFT_GROWTH = 1.5
+FLAT_SIGMA = 0.30
 # Earn-speed bonus: not every trophy dilutes alike. Early activities
 # (Chapter 1, fishing, arcade) are earned fast, so while new players flood
 # in, their earner counts grow almost as fast and their rates barely fall;
@@ -201,10 +231,15 @@ def forecast_case(case, name):
     last = history[-1]
     t_last = (parse_time(last["at"]) - release).total_seconds() / 3600.0
 
-    # The trend window: the last day of distinct reads (or all of them when
-    # the history is shorter). The launch-night flood is a different regime.
-    window = [r for r in distinct
-              if (parse_time(r["at"]) - release).total_seconds() / 3600.0 >= t_last - WINDOW_H]
+    # The trend window: the shortest window holding at least 3 distinct
+    # reads (see WINDOW_OPTIONS above). Shorter histories use all they have.
+    window = distinct
+    for w in WINDOW_OPTIONS:
+        cand = [r for r in distinct
+                if (parse_time(r["at"]) - release).total_seconds() / 3600.0 >= t_last - w]
+        if len(cand) >= 3:
+            window = cand
+            break
     if len(window) < 3:
         window = distinct
 
@@ -308,7 +343,7 @@ def forecast_case(case, name):
         if last_rate >= 99.0:
             # Near 100% a small rate fall is a huge logit move; allow room.
             sigma = max(sigma, NEAR_FULL_SIGMA)
-            median_lg = min(median_lg, logit(99.98))
+            median_lg = min(median_lg, logit(NEAR_FULL_MEDIAN_CAP))
         sigma = max(SIGMA_FLOOR, min(SIGMA_CAP, sigma))
 
         qs = [round4(min(99.99, max(0.01, inv_logit(median_lg + z * sigma)))) for z in Z]
