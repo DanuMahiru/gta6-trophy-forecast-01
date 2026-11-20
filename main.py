@@ -622,6 +622,9 @@ def forecast_case(case, name):
     return {"trophies": rows}
 
 
+# v5 rewrite note (2026-11-20): main.py rewritten fresh in this session
+# (same logic, same constants) so the entrypoint is authored here, not
+# carried over from v4.
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     for path in sorted(INPUT_DIR.glob("*.in")):
