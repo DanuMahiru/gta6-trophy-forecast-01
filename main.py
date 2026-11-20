@@ -82,6 +82,19 @@ independent sims (wider intervals cover a biased median better).
 The Exophase page was re-checked 2026-11-19 22:03 UTC: identical to
 the 14:10 UTC transcription (all 55 rates), no new real data.
 
+v5 changes vs v4 (2026-11-20): ASYMMETRIC move damping — falling
+trend moves are shrunk toward the last read by MOVE_DAMP_DOWN = 0.3,
+rising moves untouched (MOVE_DAMP_UP = 1.0), and GLOBAL_SHIFT 0.15 ->
+0.10 (re-tuned jointly; the optimum is flat over DOWN 0.2-0.4 and
+SHIFT 0.09-0.11). Final-like sim mean 0.122 -> 0.105 (-13.5%);
+practice (0.086), real-now (0.220) and noisy (0.265) exactly unchanged
+(the levers apply to final-like cases only). Rejected in v5: symmetric
+damping (UP<1.0 wrecks the A/B/C sims), FLOOR_LIFT 0.25 (helps C's
+platinum a little but destroys the independent sims: ind 0.123 ->
+0.171), EN_BLEND 0.1 (final-like 0.113 -> 0.123), and the curvature
+predictors from diag5 (per-trophy quad / slope-change correlations flip
+sign between cadences — noise, no usable signal).
+
 Standard library only, deterministic (no randomness, no wall clock: every
 time comes from the case file), reads every *.in in the input directory and
 writes one *.out per case.
@@ -168,7 +181,26 @@ SIGMA_SCALE = 1.0
 # SLOPE_INFLATION was tested and REJECTED (helps A/B/C sims but wrecks
 # the independent sims: ind 0.152 -> 0.177 at 1.15). Kept at 1.0.
 SLOPE_INFLATION = 1.0
-GLOBAL_SHIFT = 0.15
+GLOBAL_SHIFT = 0.10
+# v5: asymmetric damping of the trend move (final-like cases only).
+# The diag5 pooled correlation of (truth - median) with the move is
+# -0.44: the log-time line extrapolates the dilution-driven fall too far
+# (N saturates while E keeps growing, so the fall decelerates and the
+# truth ends up above the extrapolated line). Damping FALLING moves by
+# 0.3 cuts the final-like sim mean 0.122 -> 0.105, driven by the
+# independent sims (D 0.229/0.256 -> 0.111/0.117); the real-calibrated
+# family A is exactly unchanged (0.076/0.077) and C is unchanged, while
+# B (+9%) and F (+40%) worsen — both are artificial stress families
+# (log-linear / pure exponential decay, no saturation). Damping RISING
+# moves was tested and REJECTED (control: UP=0.8 leaves the mean at
+# 0.1217 and wrecks the A/B/C sims 0.091 -> 0.103), so UP stays 1.0.
+# The shift is re-tuned jointly: with the fall damped, less global
+# shift is needed (0.15 -> 0.10; the 0.09-0.11 region is flat). Applied
+# BEFORE the global shift. MOVE_DAMP is a symmetric alias (both sides
+# together); at 1.0 the DOWN/UP values rule.
+MOVE_DAMP = 1.0
+MOVE_DAMP_DOWN = 0.3
+MOVE_DAMP_UP = 1.0
 # v4 REJECTED: floor drift (FLOOR_LIFT). Helped sim C's platinum but
 # destroyed the independent sims (ind 0.152 -> 0.380 at lift 1.0). Kept
 # at 0.0 (no effect); documented in RESULTS.md.
@@ -532,6 +564,17 @@ def forecast_case(case, name):
         # with the trend median in logit space (hedges the N extrapolation).
         if en_med is not None and en_med[i] is not None:
             median_lg = (1.0 - EN_BLEND) * median_lg + EN_BLEND * en_med[i]
+
+        # v5: damp the trend move toward the last read (final-like
+        # cases only; 1.0/1.0 = v4). Downward and upward moves damp
+        # separately; MOVE_DAMP (if set below 1.0) drives both.
+        if not page_stale:
+            dd = MOVE_DAMP_DOWN if MOVE_DAMP >= 1.0 else MOVE_DAMP
+            du = MOVE_DAMP_UP if MOVE_DAMP >= 1.0 else MOVE_DAMP
+            if median_lg < last_lg and dd != 1.0:
+                median_lg = last_lg + dd * (median_lg - last_lg)
+            elif median_lg >= last_lg and du != 1.0:
+                median_lg = last_lg + du * (median_lg - last_lg)
 
         # v4: global median shift, final-like cases only (the stale path
         # has its own calibrated shift; 0.0 = v3).
