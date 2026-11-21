@@ -94,6 +94,24 @@ platinum a little but destroys the independent sims: ind 0.123 ->
 0.171), EN_BLEND 0.1 (final-like 0.113 -> 0.123), and the curvature
 predictors from diag5 (per-trophy quad / slope-change correlations flip
 sign between cadences — noise, no usable signal).
+SITE RESULT (2026-11-21): v5's live loss is 0.113, IDENTICAL to v3 —
+because the live leaderboard is graded on the PRACTICE cases p00/p01
+(stale page, 90-min horizon), where v3/v4/v5 produce byte-identical
+outputs: the v4/v5 levers only fire on non-stale cases. The prize is
+decided by the FINAL case f00 (graded after 2026-11-26), whose 2.5-day
+history is not stale — that is the case v5 was built for, and the case
+v6 must beat v5 on.
+
+v6 changes vs v5 (2026-11-21): narrower intervals only —
+HORIZON_SIGMA_PER_SQRT_DAY 0.15 -> 0.10 and SIGMA_SCALE 1.0 -> 0.85.
+No median change: the trend, window, damping and shift are v5 exactly.
+Final-like sim mean 0.1054 -> 0.0955 (-9.4%), family A 0.078 -> 0.055
+(-29%), f00sim 0.085 -> 0.066 (-22%); only D worsens slightly
+(+0.003/+0.004). Rejected in v6: EN_BLEND (0.138), longer windows
+(0.120+), SLOPE_INFLATION (0.113), SHIFT re-tune (0.106-0.107),
+RECENCY (flat), MOVE_CAP (no effect), and pushing the narrowing
+further (SIGMA 0.75 / DAMP 0.2 add only ~0.001 each — battery-fitting,
+so v6 stays at the conservative middle of the flat optimum).
 
 Standard library only, deterministic (no randomness, no wall clock: every
 time comes from the case file), reads every *.in in the input directory and
@@ -163,13 +181,37 @@ FLAT_SIGMA = 0.30
 BONUS_FAST = 3.0
 BONUS_MID = 0.5
 # Spread pieces.
-HORIZON_SIGMA_PER_SQRT_DAY = 0.15
+# v6: HORIZON_SIGMA_PER_SQRT_DAY 0.15 -> 0.10 and SIGMA_SCALE 1.0 -> 0.85
+# (narrower intervals). Why: v5's damping fixed the median calibration on
+# final-like cases, so the widths calibrated for the noisy 12h-window era
+# are now too wide — on the most realistic family (A) the zero-width loss
+# (0.060) is BELOW the model's total loss (0.077), i.e. the intervals
+# themselves cost loss. The sweep (sweep_v6.py, sweep_v6b.py, sweep_v6c.py)
+# shows narrowing wins on 5 of 6 truth families at both refresh cadences:
+# final-like mean 0.1054 -> 0.0955 (-9.4%), family A 0.078 -> 0.055 (-29%),
+# f00sim 0.085 -> 0.066 (-22%); only D worsens slightly (+0.003/+0.004).
+# The horizon term dominates sigma at the final's 4.5-day horizon
+# (0.15*sqrt(4.5) = 0.32 logit), so cutting it is the cleanest lever:
+# HORIZON 0.10 alone gives 0.0980 with practice/real-now/noisy EXACTLY
+# unchanged. SIGMA_SCALE 0.85 adds the rest (synth-practice also improves
+# 0.086 -> 0.078; real-now +0.007, noisy unchanged). REJECTED in v6:
+# EN_BLEND (still bad on the v5 base, 0.138), longer windows (0.120+),
+# SLOPE_INFLATION (0.113), SHIFT re-tune (0.106-0.107), RECENCY (flat),
+# MOVE_CAP (no effect on final-like; 2.0 wrecks real-now), and pushing
+# the narrowing further (SIGMA 0.75 / DAMP 0.2 add only ~0.001 each —
+# diminishing returns, more battery-fitting, so the v6 point stays at
+# the conservative middle of the flat optimum, not the extreme).
+# Honest caveat: the battery is a proxy — the real f00 truth is unknowable
+# until 2026-11-26, so this is a bet on the sims, not a proof. And
+# SIGMA_SCALE also narrows the stale-path intervals, so the LIVE practice
+# score (currently 0.113) will move too, direction unknown on the real
+# answers (synth-practice says better); the prize is decided by f00.
+HORIZON_SIGMA_PER_SQRT_DAY = 0.10
 SIGMA_FLOOR = 0.25
 SIGMA_CAP = 1.1
 NEAR_FULL_SIGMA = 0.8
-# v4: overall interval-width scale. 1.0 reproduces v3 exactly; the sweep
-# tests whether the calibrated widths are too wide or too narrow.
-SIGMA_SCALE = 1.0
+# v4: overall interval-width scale. v6: 1.0 -> 0.85 (see the note above).
+SIGMA_SCALE = 0.85
 # v4: global median shift + slope inflation (final-like cases only). The
 # trend median is biased LOW in every saturating truth family (A -0.12,
 # C -0.27, D -0.56 logit; B ~0, E +0.08, F 0.00): the log-time line fitted
